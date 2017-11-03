@@ -2,7 +2,7 @@
 
 """ Find all files embedded in ole, dump them with correct extension
 
-Main work is done by functions called within original oledump.py. 
+Main work is done by functions called within original oledump.py.
 
 TODO:
 * more robust open, that understands more different file types (e.g. open xml)
@@ -58,12 +58,27 @@ def existing_file(filename):
 def parse_args(cmd_line_args=None):
     """ parse command line arguments (sys.argv by default) """
     parser = ArgumentParser(description='Extract files embedded in OLE')
-    parser.add_argument('-t', '--target-dir', type=str, default='.',
+    parser.add_argument('-d', '--target-dir', type=str, default='.',
                         help='Directory to extract files to. File names are '
                              '0.ext, 1.ext ... . Default: current working dir')
-    parser.add_argument('input_files', metavar='FILE', nargs='+',
-                        type=existing_file, help='Office files to parse')
-    return parser.parse_args(cmd_line_args)
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='verbose mode, not implemented yet')
+    parser.add_argument('-i', '--more-input', metavar='FILE',
+                        type=existing_file,
+                        help='Additional file to parse (same as positional '
+                             'arguments)')
+    parser.add_argument('input_files', metavar='FILE', nargs='*',
+                        type=existing_file,
+                        help='Office files to parse (same as -i)')
+    args = parser.parse_args(cmd_line_args)
+
+    # combine arguments with -i (compatibility with ripOLE)
+    if args.more_input:
+        args.input_files += [args.more_input,]
+    if not args.input_files:
+        parser.error('No input given (use -i and/or positional argument[s])')
+
+    return args
 
 
 def open_file(filename):
