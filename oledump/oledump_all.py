@@ -12,6 +12,7 @@ TODO:
 from __future__ import print_function
 
 import sys
+import os
 import os.path as op
 from zipfile import is_zipfile, ZipFile
 from argparse import ArgumentParser, ArgumentTypeError
@@ -174,6 +175,9 @@ def main(cmd_line_args=None):
                 fn1, fn2, fn3, contents = oledump.ExtractOle10Native(data)
                 del data   # clear memory
                 filenames = (fn1, fn2, fn3)
+                if os.name in ('posix', 'mac'):  # convert c:\a.ext --> c/a.ext
+                    filenames = [fn.replace('\\', '/').replace(':', '/')
+                                 .replace('//', '/') for fn in filenames]
                 print('filenames: {0}'.format(filenames))
 
                 # get extension
