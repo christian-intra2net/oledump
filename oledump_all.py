@@ -36,7 +36,7 @@ if olefile is None:
         sys.path.append(THIRDPARTY_DIR)
     del THIRDPARTY_DIR
 
-import oledump
+import oledump.oledump as dumper
 
 
 # return values from main
@@ -114,28 +114,6 @@ def open_file(filename):
         yield None   # --> leads to non-0 return code
 
 
-def find_streams(ole, recurse_count=0):
-    """ recurse through storages, find streams """
-
-    if recurse_count > 100:
-        print('Warning: recusing too deep')
-        yield None
-
-    for st_path in ole.listdir(streams=True, storages=True):
-        st_type = ole.get_type(st_path)
-        if st_type == olefile.STGTY_STREAM:      # a stream --> yield
-            print('Checking stream "{0}"'.format('/'.join(st_path)))
-            yield st_path
-        elif st_type == olefile.STGTY_STORAGE:   # a storage --> recurse
-            print('Recurse into storage "{0}"'.format('/'.join(st_path)))
-            for entry in find_streams(st_path, recurse_count+1):
-                yield entry
-        else:   # todo: check if other olefile.STGTY_* options are relevant
-            print('unexpected type {0} for entry "{1}"'
-                  .format(st_type, '/'.join(st_path)))
-            yield None
-
-
 def main(cmd_line_args=None):
     """ Main function, called when running file as script
 
@@ -158,21 +136,19 @@ def main(cmd_line_args=None):
                 continue
 
             # loop over streams within file
-            for stream in find_streams(ole):
-                if stream is None:
-                    return_value = max(return_value, RETURN_STREAM_FAIL)
-                    continue
+            for st_path in ole.listdir(streams=True, storages=False):
+                print('Checking stream "{0}"'.format('/'.join(st_path)))
 
                 # read complete stream into memory
-                data = ole.openstream(stream).read(MAX_SIZE)   # for oledump.*
+                data = ole.openstream(st_path).read(MAX_SIZE)   # for oledump.*
 
                 # check if this is an embedded file
-                if not oledump.OLE10HeaderPresent(data):
+                if not dumper.OLE10HeaderPresent(data):
                     # print('not an embedded file - skip')
                     continue
 
                 # get filename options
-                fn1, fn2, fn3, contents = oledump.ExtractOle10Native(data)
+                fn1, fn2, fn3, contents = dumper.ExtractOle10Native(data)
                 del data   # clear memory
                 filenames = (fn1, fn2, fn3)
                 if os.name in ('posix', 'mac'):  # convert c:\a.ext --> c/a.ext
