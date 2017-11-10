@@ -27,7 +27,7 @@ from os.path import join, relpath
 #--- METADATA -----------------------------------------------------------------
 
 name         = "oledump"
-version      = '0.0.29'
+version      = '0.0.30'
 desc         = "Analyze OLE files (Compound Binary Files)"
 author       = "Didier Stevens"
 url          = "https://DidierStevens.com"
