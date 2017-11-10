@@ -109,7 +109,7 @@ def open_file(filename):
                     yield None
 
                 if head == olefile.MAGIC:
-                    print('unzipping ole: ' + subfile)
+                    print('  unzipping ole: ' + subfile)
                     yield olefile.OleFileIO(zipper.open(subfile)
                                             .read(MAX_SIZE))
                 else:
@@ -164,7 +164,7 @@ def main(cmd_line_args=None):
 
             # loop over streams within file
             for is_orphan, st_path, _, stream in ole_iter_streams(ole):
-                print('Checking stream "{0}"{1}'
+                print('    Checking stream "{0}"{1}'
                       .format('/'.join(st_path),
                               ' (orphan)' if is_orphan else ''))
 
@@ -174,7 +174,7 @@ def main(cmd_line_args=None):
 
                 # check if this is an embedded file
                 if not dumper.OLE10HeaderPresent(data):
-                    # print('not an embedded file - skip')
+                    # print('      not an embedded file - skip')
                     continue
 
                 # get filename options
@@ -184,29 +184,29 @@ def main(cmd_line_args=None):
                 if os.name in ('posix', 'mac'):  # convert c:\a.ext --> c/a.ext
                     filenames = [fn.replace('\\', '/').replace(':', '/')
                                  .replace('//', '/') for fn in filenames]
-                print('filenames: {0}'.format(filenames))
+                print('      filenames: {0}'.format(filenames))
 
                 # get extension
                 extensions = [op.splitext(filename)[1].strip()
                               for filename in filenames]
                 extensions = [ext for ext in extensions if ext]
-                # print('extensions: {0}'.format(extensions))
+                # print('      extensions: {0}'.format(extensions))
                 if not extensions:
-                    # print('no extension found, use empty')
+                    # print('      no extension found, use empty')
                     extension = ''
                 elif all(ext == extensions[0] for ext in extensions[1:]):
                     # all extensions are the same
-                    # print('all extension are the same')
+                    # print('      all extension are the same')
                     extension = extensions[0]
                 else:
-                    # print('multiple extensions, use first')
+                    # print('      multiple extensions, use first')
                     extension = extensions[0]
 
                 # dump
                 # todo: add decode/decrypt/... functionality here?
                 name = op.join(args.target_dir,
                                'oledump{0}{1}'.format(output_count, extension))
-                print('dumping to ' + name)
+                print('      dumping to ' + name)
                 with open(name, 'wb') as writer:
                     writer.write(contents)
 
