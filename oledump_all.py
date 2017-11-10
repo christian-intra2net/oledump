@@ -7,6 +7,9 @@ Main work is done by functions called within original oledump.py.
 TODO:
 * more robust open, that understands more different file types (e.g. open xml)
 * add some relevant options from oledump, like decoders or decryption
+
+License:
+Same as oledump.py. Use at your own risk.
 """
 
 from __future__ import print_function
@@ -37,6 +40,11 @@ if olefile is None:
     del THIRDPARTY_DIR
 
 import oledump.oledump as dumper
+
+__description__ = 'Automate oledump.py to dump all embedded files'
+__author__ = 'Christian Herdtweck'
+__version__ = '0.0.30'
+__date__ = '2017/11/10'
 
 
 # return values from main
@@ -114,6 +122,25 @@ def open_file(filename):
         yield None   # --> leads to non-0 return code
 
 
+def ole_iter_streams(ole):
+    """ Iterate over all streams (including orphans) in given OleFileIO
+
+    modified copy of oledump.OLEGetStreams, only it yields and does not
+    read() streams
+    """
+    for fname in ole.listdir(streams=True, storages=False):
+        yield False, fname, ole.get_type(fname), ole.openstream(fname)
+    for sid in range(len(ole.direntries)):
+        entry = ole.direntries[sid]
+        if entry is None:
+            entry = ole._load_direntry(sid)
+            if entry.entry_type == olefile.STGTY_STREAM:
+                yield True, entry.name, entry.entry_type, \
+                      ole._open(entry.isectStart, entry.size)
+    # TODO: can probably skip the first loop since 2nd finds the same
+    # entries again with entry != None (see oletools/olevba.py)
+
+
 def main(cmd_line_args=None):
     """ Main function, called when running file as script
 
@@ -136,11 +163,14 @@ def main(cmd_line_args=None):
                 continue
 
             # loop over streams within file
-            for st_path in ole.listdir(streams=True, storages=False):
-                print('Checking stream "{0}"'.format('/'.join(st_path)))
+            for is_orphan, st_path, _, stream in ole_iter_streams(ole):
+                print('Checking stream "{0}"{1}'
+                      .format('/'.join(st_path),
+                              ' (orphan)' if is_orphan else ''))
 
                 # read complete stream into memory
-                data = ole.openstream(st_path).read(MAX_SIZE)   # for oledump.*
+                data = stream.read(MAX_SIZE)   # for dumper.*
+                # TODO: actually only need first bytes and the size until end
 
                 # check if this is an embedded file
                 if not dumper.OLE10HeaderPresent(data):
