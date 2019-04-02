@@ -178,7 +178,10 @@ def main(cmd_line_args=None):
                     continue
 
                 # get filename options
-                fn1, fn2, fn3, contents = dumper.ExtractOle10Native(data)
+                embedded_data = dumper.ExtractOle10Native(data)
+                if not embedded_data:
+                    continue
+                fn1, fn2, fn3, contents = embedded_data
                 del data   # clear memory
                 filenames = (fn1, fn2, fn3)
                 if os.name in ('posix', 'mac'):  # convert c:\a.ext --> c/a.ext
