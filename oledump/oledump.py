@@ -2,8 +2,8 @@
 
 __description__ = 'Analyze OLE files (Compound Binary Files)'
 __author__ = 'Didier Stevens'
-__version__ = '0.0.30'
-__date__ = '2017/11/04'
+__version__ = '0.0.42'
+__date__ = '2019/03/12'
 
 """
 
@@ -70,6 +70,21 @@ History:
   2017/10/14: 0.0.29 added options -t, -S; and \x00Attribut bugfix provided by Charles Smutz
   2017/11/01: 0.0.30 replaced hexdump and hexasciidump with cDump
   2017/11/04: added return codes -1 and 1
+  2017/12/13: 0.0.31 corrected man
+  2017/12/16: 0.0.32 added indexQuiet to cPlugin
+  2018/02/18: 0.0.33 added option -j
+  2018/05/06: 0.0.34 -s is more userfriendly
+  2018/07/01: 0.0.35 rename option --json to --jsonoutput
+  2018/07/01: fix for json output with OOXML files
+  2018/07/07: 0.0.36: updated to version 2 of jsonoutput
+  2018/08/04: 0.0.37 added option --vbadecompressskipattributes
+  2018/08/13: 0.0.38 changed output processing of plugins like plugin_ppt: if a plugin returns a string, that string is dumped with option -q
+  2018/11/25: 0.0.39 started VBA/dir parsing for modules, to display with option -i
+  2018/11/26: continued VBA/dir parsing for modules; added c and s selection; added selection warning; added option -A and option -T; added yara #x#
+  2018/11/30: added yara #r#; updated ParseCutTerm
+  2018/12/18: 0.0.40 added option --password
+  2019/02/16: 0.0.41 updated Cut
+  2019/03/12: 0.0.42 added warning for ZIP container without ole file; fixed selectiong warning
 
 Todo:
 """
@@ -88,6 +103,8 @@ import textwrap
 import re
 import string
 import codecs
+import json
+import struct
 if sys.version_info[0] >= 3:
     from io import StringIO
 else:
@@ -150,12 +167,14 @@ When selecting a stream, its content is shown as an ASCII dump (this can also be
 Option -x produces a hexadecimal dump instead of an ASCII dump.
 
 C:\Demo>oledump.py -s 1 -x Book1.xls
-00000000: FE FF 00 00 05 01 02 00 00 00 00 00 00 00 00 00
-00000010: 00 00 00 00 00 00 00 00 01 00 00 00 02 D5 CD D5
-00000020: 9C 2E 1B 10 93 97 08 00 2B 2C F9 AE 30 00 00 00
-00000030: E4 00 00 00 09 00 00 00 01 00 00 00 50 00 00 00
-00000040: 0F 00 00 00 58 00 00 00 17 00 00 00 70 00 00 00
+FE FF 00 00 05 01 02 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 01 00 00 00 02 D5 CD D5
+9C 2E 1B 10 93 97 08 00 2B 2C F9 AE 30 00 00 00
+E4 00 00 00 09 00 00 00 01 00 00 00 50 00 00 00
+0F 00 00 00 58 00 00 00 17 00 00 00 70 00 00 00
 ...
+
+Option -A does an ASCII dump (like option -a), but with duplicate lines removed.
 
 Option -S dumps the strings.
 
@@ -176,7 +195,8 @@ termA and termB can be:
 - nothing (an empty string)
 - a positive decimal number; example: 10
 - an hexadecimal number (to be preceded by 0x); example: 0x10
-- a case sensitive string to search for (surrounded by square brackets and single quotes); example: ['MZ']
+- a case sensitive ASCII string to search for (surrounded by square brackets and single quotes); example: ['MZ']
+- a case sensitive UNICODE string to search for (surrounded by square brackets and single quotes prefixed with u); example: [u'User']
 - an hexadecimal string to search for (surrounded by square brackets); example: [d0cf11e0]
 If termA is nothing, then the cut section of bytes starts with the byte at position 0.
 If termA is a number, then the cut section of bytes starts with the byte at the position given by the number (first byte has index 0).
@@ -187,9 +207,9 @@ When termB is a number, it can have suffix letter l. This indicates that the num
 termB can also be a negative number (decimal or hexademical): in that case the position is counted from the end of the file. For example, :-5 selects the complete file except the last 5 bytes.
 If termB is a string to search for, then the cut section of bytes ends with the last byte at the position where the string is first found. If the string is not found, the cut is empty (0 bytes).
 No checks are made to assure that the position specified by termA is lower than the position specified by termB. This is left up to the user.
-Search string expressions (ASCII and hexadecimal) can be followed by an instance (a number equal to 1 or greater) to indicate which instance needs to be taken. For example, ['ABC']2 will search for the second instance of string 'ABC'. If this instance is not found, then nothing is selected.
-Search string expressions (ASCII and hexadecimal) can be followed by an offset (+ or - a number) to add (or substract) an offset to the found instance. For example, ['ABC']+3 will search for the first instance of string 'ABC' and then select the bytes after ABC (+ 3).
-Finally, search string expressions (ASCII and hexadecimal) can be followed by an instance and an offset.
+Search string expressions (ASCII, UNICODE and hexadecimal) can be followed by an instance (a number equal to 1 or greater) to indicate which instance needs to be taken. For example, ['ABC']2 will search for the second instance of string 'ABC'. If this instance is not found, then nothing is selected.
+Search string expressions (ASCII, UNICODE and hexadecimal) can be followed by an offset (+ or - a number) to add (or substract) an offset to the found instance. This number can be a decimal or hexadecimal (prefix 0x) value. For example, ['ABC']+3 will search for the first instance of string 'ABC' and then select the bytes after ABC (+ 3).
+Finally, search string expressions (ASCII, UNICODE and hexadecimal) can be followed by an instance and an offset.
 Examples:
 This argument can be used to dump the first 256 bytes of a PE file located inside the stream: ['MZ']:0x100l
 This argument can be used to dump the OLE file located inside the stream: [d0cf11e0]:
@@ -240,6 +260,8 @@ Attribute VB_Customizable = True
 If the VBA code contains other statements than Attribute or Options statements, then the indicator is a upper case letter M.
 This M/m indicator allows you to focus first on interesting VBA macros.
 
+To decompress the macros and skip the initial attributes, use option --vbadecompressskipattributes.
+
 When compressed VBA code is corrupted, the status indicatore will be E (error).
 C:\Demo>oledump.py Book2-vba.xls
   1:       109 '\\x01CompObj'
@@ -257,6 +279,40 @@ C:\Demo>oledump.py Book2-vba.xls
 
 To view the VBA code up til the corruption, use option --vbadecompresscorrupt.
 C:\Demo>oledump.py -s 7 --vbadecompresscorrupt Book2-vba.xls
+
+Option -i (without option -s) displays extra information for modules:
+C:\Demo>oledump.py -i Book2-vba.xls
+  1:       107             '\\x01CompObj'
+  2:       256             '\\x05DocumentSummaryInformation'
+  3:       216             '\\x05SummaryInformation'
+  4:     15615             'Workbook'
+  5:       435             '_VBA_PROJECT_CUR/PROJECT'
+  6:        62             '_VBA_PROJECT_CUR/PROJECTwm'
+  7: m     985     813+172 '_VBA_PROJECT_CUR/VBA/Sheet1'
+  8: M    1767    1545+222 '_VBA_PROJECT_CUR/VBA/ThisWorkbook'
+  9:      2413             '_VBA_PROJECT_CUR/VBA/_VBA_PROJECT'
+ 10:      1253             '_VBA_PROJECT_CUR/VBA/__SRP_0'
+ 11:       106             '_VBA_PROJECT_CUR/VBA/__SRP_1'
+ 12:       504             '_VBA_PROJECT_CUR/VBA/__SRP_2'
+ 13:       103             '_VBA_PROJECT_CUR/VBA/__SRP_3'
+ 14:       524             '_VBA_PROJECT_CUR/VBA/dir'
+
+Modules can contain compiled code and source code (usually, both). In this example, stream 7 and 8 have extra information: the size of the compiled code (left of the + sign) and the size of de source code (right of the + sign).
+Stream 7 is a module with size 985, the first 813 bytes are the compiled code and the last 172 bytes are the source code.
+
+When selecting the content of modules, the index can be suffixed with c to select only the bytes of the compiled code, or with s to select only the bytes of the source code:
+C:\Demo>oledump.py -s 7s Book2-vba.xls
+00000000: 01 A8 B0 00 41 74 74 72  69 62 75 74 00 65 20 56  ....Attribut.e V
+00000010: 42 5F 4E 61 6D 00 65 20  3D 20 22 53 68 65 40 65  B_Nam.e = "She@e
+00000020: 74 31 22 0D 0A 0A E8 42  04 61 73 02 74 30 7B 30  t1"....B.as.t0{0
+00000030: 30 30 C0 32 30 38 32 30  2D 00 20 04 08 0E 43 00  00.20820-. ...C.
+00000040: 14 02 1C 01 24 30 30 34  36 02 7D 0D 7C 47 6C 6F  ....$0046.}.|Glo
+00000050: 62 61 6C 21 01 C4 53 70  61 63 01 92 46 61 08 6C  bal!..Spac..Fa.l
+00000060: 73 65 0C 64 43 72 65 61  10 74 61 62 6C 15 1F 50  se.dCrea.tabl..P
+00000070: 72 65 20 64 65 63 6C 61  00 06 49 64 11 00 AB 54  re decla..Id...T
+00000080: 72 75 0D 42 45 78 70 08  6F 73 65 14 1C 54 65 6D  ru.BExp.ose..Tem
+00000090: 70 00 6C 61 74 65 44 65  72 69 06 76 02 24 92 42  p.lateDeri.v.$.B
+000000A0: 75 73 74 6F 6D 0C 69 7A  04 44 03 32              ustom.iz.D.2
 
 Option -r can be used together with option -v to decompress a VBA macro stream that was extracted through some other mean than oledump. In such case, you provide the file that contains the compressed macro, instead of the OLE file.
 
@@ -337,7 +393,7 @@ oledump.py -p @all-plugins.txt sample.xls
 
 Some plugins take options too. Use --pluginoptions to specify these options.
 
-oledump can scan the content of the streams with YARA rules (the YARA Python module must be installed). You provide the YARA rules with option -y. You can provide one file with YARA rules, an at-file (@file containing the filenames of the YARA files) or a directory. In case of a directory, all files inside the directory are read as YARA files. Or you can provide the YARA rule with the option value if it starts with # (literal), #s# (string), #q# (quote), #h# (hexadecimal) or #b# (base64). Example: -y "#rule demo {strings: $a=\"demo\" condition: $a}"
+oledump can scan the content of the streams with YARA rules (the YARA Python module must be installed). You provide the YARA rules with option -y. You can provide one file with YARA rules, an at-file (@file containing the filenames of the YARA files) or a directory. In case of a directory, all files inside the directory are read as YARA files. Or you can provide the YARA rule with the option value (and adhoc rule) if it starts with # (literal), #s# (string), #x# (hexadecimal string), #r# (regex string), #q# (quote), #h# (hexadecimal) or #b# (base64). Example: -y "#rule demo {strings: $a=\"demo\" condition: $a}"
 Using #s#demo will instruct oledump to generate a rule to search for string demo (rule string {strings: $a = "demo" ascii wide nocase condition: $a) and use that rule.
 All streams are scanned with the provided YARA rules, you can not use option -s to select an individual stream.
 
@@ -382,7 +438,7 @@ rule Contains_PE_File
 
 Distributed together with oledump are the YARA rules maldoc.yara. These are YARA rules to detect shellcode, based on Frank Boldewin's shellcode detector used in OfficeMalScanner.
 
-Two external variables are declared for use in YARA rules: streamname contains the stream name, and VBA is True when the YARA engine is given VBA source code to scan. 
+Two external variables are declared for use in YARA rules: streamname contains the stream name, and VBA is True when the YARA engine is given VBA source code to scan.
 
 When looking for traces of Windows executable code (PE files, shellcode, ...) with YARA rules, one must take into account the fact that the executable code might have been encoded (for example via XOR and a key) to evade detection.
 To deal with this possibility, oledump supports decoders. A decoder is another type of plugin, that will bruteforce a type of encoding on each stream. For example, decoder_xor1 will encode each stream via XOR and a key of 1 byte. So effectively, 256 different encodings of the stream will be scanned by the YARA rules. 256 encodings because: XOR key 0x00, XOR key 0x01, XOR key 0x02, ..., XOR key 0xFF
@@ -513,6 +569,10 @@ oledump also supports input/output redirection. This way, oledump can be used in
 Say for example that the sample OLE file is GZIP compressed. oledump can not handle GZIP files directly, but you can decompress and cat it with zcat and then pipe it into oledump for analysis, like this:
 zcat sample.gz | oledump.py
 
+With option -T (--headtail), output can be truncated to the first 10 lines and last 10 lines of output.
+
+With option -j, oledump will output the content of the ole file as a JSON object that can be piped into other tools that support this JSON format.
+
 The return codes of oledump are:
  -1 when an error occured
  0 when the file is not an ole file (or does not contain an ole file)
@@ -581,22 +641,36 @@ class cDump():
             countSpaces += 1
         return hexDump + '  ' + (' ' * countSpaces) + asciiDump
 
-    def HexAsciiDump(self):
+    def HexAsciiDump(self, rle=False):
         oDumpStream = self.cDumpStream(self.prefix)
+        position = ''
         hexDump = ''
         asciiDump = ''
+        previousLine = None
+        countRLE = 0
         for i, b in enumerate(self.data):
             b = self.C2IIP2(b)
             if i % self.dumplinelength == 0:
                 if hexDump != '':
-                    oDumpStream.Addline(self.CombineHexAscii(hexDump, asciiDump))
-                hexDump = '%08X:' % (i + self.offset)
+                    line = self.CombineHexAscii(hexDump, asciiDump)
+                    if not rle or line != previousLine:
+                        if countRLE > 0:
+                            oDumpStream.Addline('* %d 0x%02x' % (countRLE, countRLE * self.dumplinelength))
+                        oDumpStream.Addline(position + line)
+                        countRLE = 0
+                    else:
+                        countRLE += 1
+                    previousLine = line
+                position = '%08X:' % (i + self.offset)
+                hexDump = ''
                 asciiDump = ''
             if i % self.dumplinelength == self.dumplinelength / 2:
                 hexDump += ' '
             hexDump += ' %02X' % b
-            asciiDump += IFF(b >= 32 and b <= 128, chr(b), '.')
-        oDumpStream.Addline(self.CombineHexAscii(hexDump, asciiDump))
+            asciiDump += IFF(b >= 32 and b < 128, chr(b), '.')
+        if countRLE > 0:
+            oDumpStream.Addline('* %d 0x%02x' % (countRLE, countRLE * self.dumplinelength))
+        oDumpStream.Addline(self.CombineHexAscii(position + hexDump, asciiDump))
         return oDumpStream.Content()
 
     def Base64Dump(self, nowhitespace=False):
@@ -631,8 +705,8 @@ class cDump():
 def HexDump(data):
     return cDump(data, dumplinelength=dumplinelength).HexDump()
 
-def HexAsciiDump(data):
-    return cDump(data, dumplinelength=dumplinelength).HexAsciiDump()
+def HexAsciiDump(data, rle=False):
+    return cDump(data, dumplinelength=dumplinelength).HexAsciiDump(rle=rle)
 
 def Translate(expression):
     try:
@@ -737,7 +811,7 @@ def DecompressChunk(compressedChunk):
                 decompressedChunk += copy
     return decompressedChunk, compressedChunk[size:]
 
-def Decompress(compressedData):
+def Decompress(compressedData, replace=True):
     if compressedData[0] != chr(1):
         return (False, None)
     remainder = compressedData[1:]
@@ -747,7 +821,10 @@ def Decompress(compressedData):
         if decompressedChunk == None:
             return (False, decompressed)
         decompressed += decompressedChunk
-    return (True, decompressed.replace('\r\n', '\n'))
+    if replace:
+        return (True, decompressed.replace('\r\n', '\n'))
+    else:
+        return (True, decompressed)
 
 def FindCompression(data):
     return data.find('\x00Attribut\x00e ')
@@ -760,12 +837,22 @@ def SearchAndDecompressSub(data):
         compressedData = data[position - 3:]
     return Decompress(compressedData)
 
-def SearchAndDecompress(data, ifError='Error: unable to decompress\n'):
+def SkipAttributes(text):
+    oAttribute = re.compile('^Attribute VB_.+? = [^\n]+\n')
+    while True:
+        oMatch = oAttribute.match(text)
+        if oMatch == None:
+            break
+        text = text[len(oMatch.group()):]
+    return text
+
+def SearchAndDecompress(data, ifError='Error: unable to decompress\n', skipAttributes=False):
     result, decompress = SearchAndDecompressSub(data)
-    if result:
-        return decompress
-    elif ifError == None:
-        return decompress
+    if result or ifError == None:
+        if skipAttributes:
+            return SkipAttributes(decompress)
+        else:
+            return decompress
     else:
         return ifError
 
@@ -867,6 +954,7 @@ def ExpandFilenameArguments(filenames):
 
 class cPluginParent():
     macroOnly = False
+    indexQuiet = False
 
 def LoadPlugins(plugins, plugindir, verbose):
     if plugins == '':
@@ -1152,6 +1240,18 @@ def Replace(string, dReplacements):
     else:
         return string
 
+def ParseInteger(argument):
+    sign = 1
+    if argument.startswith('+'):
+        argument = argument[1:]
+    elif argument.startswith('-'):
+        argument = argument[1:]
+        sign = -1
+    if argument.startswith('0x'):
+        return sign * int(argument[2:], 16)
+    else:
+        return sign * int(argument)
+
 def ParseCutTerm(argument):
     if argument == '':
         return CUTTERM_NOTHING, None, ''
@@ -1164,23 +1264,28 @@ def ParseCutTerm(argument):
             value = -value
         return CUTTERM_POSITION, value, argument[len(oMatch.group(0)):]
     if oMatch == None:
-        oMatch = re.match(r'\[([0-9a-f]+)\](\d+)?([+-]\d+)?', argument, re.I)
+        oMatch = re.match(r'\[([0-9a-f]+)\](\d+)?([+-](?:0x[0-9a-f]+|\d+))?', argument, re.I)
     else:
         value = int(oMatch.group(1))
         if argument.startswith('-'):
             value = -value
         return CUTTERM_POSITION, value, argument[len(oMatch.group(0)):]
     if oMatch == None:
-        oMatch = re.match(r"\[\'(.+?)\'\](\d+)?([+-]\d+)?", argument)
+        oMatch = re.match(r"\[u?\'(.+?)\'\](\d+)?([+-](?:0x[0-9a-f]+|\d+))?", argument)
     else:
         if len(oMatch.group(1)) % 2 == 1:
             raise Exception("Uneven length hexadecimal string")
         else:
-            return CUTTERM_FIND, (binascii.a2b_hex(oMatch.group(1)), int(Replace(oMatch.group(2), {None: '1'})), int(Replace(oMatch.group(3), {None: '0'}))), argument[len(oMatch.group(0)):]
+            return CUTTERM_FIND, (binascii.a2b_hex(oMatch.group(1)), int(Replace(oMatch.group(2), {None: '1'})), ParseInteger(Replace(oMatch.group(3), {None: '0'}))), argument[len(oMatch.group(0)):]
     if oMatch == None:
         return None, None, argument
     else:
-        return CUTTERM_FIND, (oMatch.group(1), int(Replace(oMatch.group(2), {None: '1'})), int(Replace(oMatch.group(3), {None: '0'}))), argument[len(oMatch.group(0)):]
+        if argument.startswith("[u'"):
+            # convert ascii to unicode 16 byte sequence
+            searchtext = oMatch.group(1).decode('unicode_escape').encode('utf16')[2:]
+        else:
+            searchtext = oMatch.group(1)
+        return CUTTERM_FIND, (searchtext, int(Replace(oMatch.group(2), {None: '1'})), ParseInteger(Replace(oMatch.group(3), {None: '0'}))), argument[len(oMatch.group(0)):]
 
 def ParseCutArgument(argument):
     type, value, remainder = ParseCutTerm(argument.strip())
@@ -1214,8 +1319,8 @@ def ParseCutArgument(argument):
     else:
         return typeLeft, valueLeft, type, value
 
-def Find(data, value, nth):
-    position = -1
+def Find(data, value, nth, startposition=-1):
+    position = startposition
     while nth > 0:
         position = data.find(value, position + 1)
         if position == -1:
@@ -1225,12 +1330,12 @@ def Find(data, value, nth):
 
 def CutData(stream, cutArgument):
     if cutArgument == '':
-        return stream
+        return [stream, None, None]
 
     typeLeft, valueLeft, typeRight, valueRight = ParseCutArgument(cutArgument)
 
     if typeLeft == None:
-        return stream
+        return [stream, None, None]
 
     if typeLeft == CUTTERM_NOTHING:
         positionBegin = 0
@@ -1239,7 +1344,7 @@ def CutData(stream, cutArgument):
     elif typeLeft == CUTTERM_FIND:
         positionBegin = Find(stream, valueLeft[0], valueLeft[1])
         if positionBegin == -1:
-            return ''
+            return ['', None, None]
         positionBegin += valueLeft[2]
     else:
         raise Exception("Unknown value typeLeft")
@@ -1253,16 +1358,39 @@ def CutData(stream, cutArgument):
     elif typeRight == CUTTERM_LENGTH:
         positionEnd = positionBegin + valueRight
     elif typeRight == CUTTERM_FIND:
-        positionEnd = Find(stream, valueRight[0], valueRight[1])
+        positionEnd = Find(stream, valueRight[0], valueRight[1], positionBegin)
         if positionEnd == -1:
-            return ''
+            return ['', None, None]
         else:
             positionEnd += len(valueRight[0])
         positionEnd += valueRight[2]
     else:
         raise Exception("Unknown value typeRight")
 
-    return stream[positionBegin:positionEnd]
+    return [stream[positionBegin:positionEnd], positionBegin, positionEnd]
+
+def RemoveLeadingEmptyLines(data):
+    if data[0] == '':
+        return RemoveLeadingEmptyLines(data[1:])
+    else:
+        return data
+
+def RemoveTrailingEmptyLines(data):
+    if data[-1] == '':
+        return RemoveTrailingEmptyLines(data[:-1])
+    else:
+        return data
+
+def HeadTail(data, apply):
+    count = 10
+    if apply:
+        lines = RemoveTrailingEmptyLines(RemoveLeadingEmptyLines(data.split('\n')))
+        if len(lines) <= count * 2:
+            return data
+        else:
+            return '\n'.join(lines[0:count] + ['...'] + lines[-count:])
+    else:
+        return data
 
 def ExtraInfoMD5(data):
     return hashlib.md5(data).hexdigest()
@@ -1402,11 +1530,88 @@ def OLEGetStreams(ole):
                 olestreams.append([1, entry.name, entry.entry_type, ole._open(entry.isectStart, entry.size).read()])
     return olestreams
 
+def SelectPart(stream, part, moduleinfodata):
+    if part == '':
+        return stream
+    if not part in ['c', 's']:
+        return ''
+    if moduleinfodata == None:
+        return ''
+    if part == 'c':
+        return stream[:moduleinfodata[6]]
+    else:
+        return stream[moduleinfodata[6]:]
+
+def ParseVBADIR(ole):
+    vbadirinfo = []
+    for fname in ole.listdir():
+        if len(fname) >= 2 and fname[-2] == 'VBA' and fname[-1] == 'dir':
+            vbadirinfo = [fname]
+            status, vbadirdata = Decompress(ole.openstream(fname).read(), False)
+            if status:
+                for position in FindAll(vbadirdata, '\x0F\x00\x02\x00\x00\x00'):
+                    result = struct.unpack('<HIHHIHH', vbadirdata[position:][0:18])
+                    if result[3] == 0x13 and result[4] == 0x02 and result[6] == 0x19:
+                        vbadirinfo.append(result[2])
+                        moduledata = vbadirdata[position + 16:]
+                        moduleinfo = {}
+                        while len(moduledata) > 2 and moduledata[0:2] == '\x19\x00':
+                            result = struct.unpack('<HI', moduledata[0:6])
+                            moduledata = moduledata[6:]
+                            namerecord = moduledata[0:result[1]]
+                            moduledata = moduledata[result[1]:]
+                            result = struct.unpack('<HI', moduledata[0:6])
+                            if result[0] != 0x47:
+                                break
+                            moduledata = moduledata[6:]
+                            nameunicoderecord = moduledata[0:result[1]]
+                            moduledata = moduledata[result[1]:]
+                            result = struct.unpack('<HI', moduledata[0:6])
+                            if result[0] != 0x1A:
+                                break
+                            moduledata = moduledata[6:]
+                            streamnamerecord = moduledata[0:result[1]]
+                            moduledata = moduledata[result[1]:]
+                            result = struct.unpack('<HI', moduledata[0:6])
+                            if result[0] != 0x32:
+                                break
+                            moduledata = moduledata[6:]
+                            streamnameunicoderecord = moduledata[0:result[1]]
+                            moduledata = moduledata[result[1]:]
+                            result = struct.unpack('<HI', moduledata[0:6])
+                            if result[0] != 0x1C:
+                                break
+                            moduledata = moduledata[6:]
+                            docstringrecordrecord = moduledata[0:result[1]]
+                            moduledata = moduledata[result[1]:]
+                            result = struct.unpack('<HI', moduledata[0:6])
+                            if result[0] != 0x48:
+                                break
+                            moduledata = moduledata[6:]
+                            docstringunicoderecordrecord = moduledata[0:result[1]]
+                            moduledata = moduledata[result[1]:]
+                            result = struct.unpack('<HII', moduledata[0:10])
+                            if result[0] != 0x31 or result[1] != 0x04:
+                                break
+                            moduledata = moduledata[10:]
+                            moduleoffset = result[2]
+                            moduledata = moduledata[10 + 8 + 6:]
+                            if moduledata[0:2] != '\x2B\x00':
+                                moduledata = moduledata[6:]
+                            if moduledata[0:2] != '\x2B\x00':
+                                moduledata = moduledata[6:]
+                            moduledata = moduledata[2 + 4:]
+                            moduleinfo[streamnamerecord] = [namerecord, nameunicoderecord, streamnamerecord, streamnameunicoderecord, docstringrecordrecord, docstringunicoderecordrecord, moduleoffset]
+                        if moduleinfo != {}:
+                            vbadirinfo.append(moduleinfo)
+    return vbadirinfo
+
 def OLESub(ole, prefix, rules, options):
     global plugins
     global decoders
 
     returnCode = 1
+    selectionCounter = 0
 
     if options.metadata:
         metadata = ole.get_metadata()
@@ -1426,7 +1631,22 @@ def OLESub(ole, prefix, rules, options):
                     print(' %s: %s %s' % (attribute, value, LookupCodepage(value)))
                 else:
                     print(' %s: %s' % (attribute, value))
-        return returnCode
+        return (returnCode, 0)
+
+    if options.jsonoutput:
+        object = []
+        counter = 1
+        for orphan, fname, entry_type, stream in OLEGetStreams(ole):
+            object.append({'id': counter, 'name': PrintableName(fname), 'content': binascii.b2a_base64(stream).strip('\n')})
+            counter += 1
+        print(json.dumps({'version': 2, 'id': 'didierstevens.com', 'type': 'content', 'fields': ['id', 'name', 'content'], 'items': object}))
+        return (returnCode, 0)
+
+    vbadirinfo = ParseVBADIR(ole)
+    if len(vbadirinfo) == 3:
+        dModuleinfo = vbadirinfo[2]
+    else:
+        dModuleinfo = {}
 
     if options.select == '':
         counter = 1
@@ -1434,11 +1654,19 @@ def OLESub(ole, prefix, rules, options):
         for orphan, fname, entry_type, stream in OLEGetStreams(ole):
             indicator = ' '
             macroPresent = False
+            if options.info:
+                moduleinfo = ' ' * 12
+            else:
+                moduleinfo = ''
             lengthString = '      '
             if entry_type == 1:
                 indicator = '.'
             elif entry_type == 2:
                 lengthString = '%7d' % len(stream)
+                moduleinfodata = dModuleinfo.get(fname[-1], None)
+                if options.info and moduleinfodata != None:
+                    moduleinfo = '%d+%d' % (moduleinfodata[6], len(stream) - moduleinfodata[6])
+                    moduleinfo = '%12s' % moduleinfo
                 macroPresent = FindCompression(stream) != -1
                 if macroPresent:
                     returnCode = 2
@@ -1450,9 +1678,9 @@ def OLESub(ole, prefix, rules, options):
                             indicator = 'm'
                 elif OLE10HeaderPresent(stream):
                     indicator = 'O'
+            index = '%s%d' % (prefix, counter)
             if not options.quiet:
-                index = '%s%d' % (prefix, counter)
-                line = '%3s: %s %s %s' % (index, indicator, lengthString, PrintableName(fname, orphan))
+                line = '%3s: %s %s%s %s' % (index, indicator, lengthString, moduleinfo, PrintableName(fname, orphan))
                 if indicator.lower() == 'm' and options.vbadecompress:
                     streamForExtra = SearchAndDecompress(stream)
                 else:
@@ -1475,17 +1703,28 @@ def OLESub(ole, prefix, rules, options):
                     print('Error instantiating plugin: %s' % cPlugin.name)
                     if options.verbose:
                         raise e
-                    return returnCode
+                    return (returnCode, 0)
                 if oPlugin != None:
                     result = oPlugin.Analyze()
                     if oPlugin.ran:
                         if options.quiet:
-                            for line in result:
-                                print(MyRepr(line))
+                            if oPlugin.indexQuiet:
+                                if result != []:
+                                    print('%3s: %s' % (index, MyRepr(result[0])))
+                            elif type(result) == str:
+                                IfWIN32SetBinary(sys.stdout)
+                                StdoutWriteChunked(result)
+                            else:
+                                for line in result:
+                                    print(MyRepr(line))
                         else:
                             print('               Plugin: %s ' % oPlugin.name)
-                            for line in result:
-                                print('                 ' + MyRepr(line))
+                            if type(result) == str:
+                                print('                 use option -q to dump the following data')
+                                print('                 ' + MyRepr(result))
+                            else:
+                                for line in result:
+                                    print('                 ' + MyRepr(line))
             counter += 1
             if options.yara != None:
                 oDecoders = [cIdentity(stream, None)]
@@ -1497,7 +1736,7 @@ def OLESub(ole, prefix, rules, options):
                         print('Error instantiating decoder: %s' % cDecoder.name)
                         if options.verbose:
                             raise e
-                        return returnCode
+                        return (returnCode, 0)
                 for oDecoder in oDecoders:
                     while oDecoder.Available():
                         for result in rules.match(data=oDecoder.Decode(), externals={'streamname': PrintableName(fname), 'VBA': False}):
@@ -1521,7 +1760,7 @@ def OLESub(ole, prefix, rules, options):
     else:
         if len(decoders) > 1:
             print('Error: provide only one decoder when using option select')
-            return returnCode
+            return (returnCode, 0)
         if options.decompress:
             DecompressFunction = HeuristicDecompress
         else:
@@ -1536,6 +1775,11 @@ def OLESub(ole, prefix, rules, options):
                 DumpFunction = lambda x: SearchAndDecompress(x, '')
             else:
                 DumpFunction = SearchAndDecompress
+        elif options.vbadecompressskipattributes:
+            if options.select == 'a':
+                DumpFunction = lambda x: SearchAndDecompress(x, '', True)
+            else:
+                DumpFunction = lambda x: SearchAndDecompress(x, skipAttributes=True)
         elif options.vbadecompresscorrupt:
             DumpFunction = lambda x: SearchAndDecompress(x, None)
         elif options.extract:
@@ -1547,17 +1791,27 @@ def OLESub(ole, prefix, rules, options):
             DumpFunction = Translate(options.translate)
         elif options.strings:
             DumpFunction = DumpFunctionStrings
+        elif options.asciidumprle:
+            DumpFunction = lambda x: HexAsciiDump(x, True)
         else:
             DumpFunction = HexAsciiDump
+
         counter = 1
+        if options.select.endswith('c') or options.select.endswith('s'):
+            selection = options.select[:-1]
+            part = options.select[-1]
+        else:
+            selection = options.select
+            part = ''
         for orphan, fname, entry_type, stream in OLEGetStreams(ole):
-            if options.select == 'a' or ('%s%d' % (prefix, counter)) == options.select:
-                StdoutWriteChunked(DumpFunction(DecompressFunction(DecodeFunction(decoders, options, CutData(stream, options.cut)))))
-                if options.select != 'a':
+            if selection == 'a' or ('%s%d' % (prefix, counter)) == selection or prefix == 'A' and str(counter) == selection:
+                StdoutWriteChunked(HeadTail(DumpFunction(DecompressFunction(DecodeFunction(decoders, options, CutData(SelectPart(stream, part, dModuleinfo.get(fname[-1], None)), options.cut)[0]))), options.headtail))
+                selectionCounter += 1
+                if selection != 'a':
                     break
             counter += 1
 
-    return returnCode
+    return (returnCode, selectionCounter)
 
 def YARACompile(ruledata):
     if ruledata.startswith('#'):
@@ -1569,6 +1823,10 @@ def YARACompile(ruledata):
             rule = 'rule string {strings: $a = "%s" ascii wide nocase condition: $a}' % ruledata[3:]
         elif ruledata.startswith('#q#'):
             rule = ruledata[3:].replace("'", '"')
+        elif ruledata.startswith('#x#'):
+            rule = 'rule hexadecimal {strings: $a = { %s } condition: $a}' % ruledata[3:]
+        elif ruledata.startswith('#r#'):
+            rule = 'rule regex {strings: $a = /%s/ ascii wide nocase condition: $a}' % ruledata[3:]
         else:
             rule = ruledata[1:]
         return yara.compile(source=rule, externals={'streamname': '', 'VBA': False})
@@ -1588,6 +1846,10 @@ def FilenameInSimulations(filename):
     if dslsimulationdb == None:
         return False
     return filename in dslsimulationdb.dSimulations
+
+def PrintWarningSelection(select, selectionCounter):
+    if select != '' and selectionCounter == 0:
+        print('Warning: no stream was selected with expression %s' % select)
 
 def OLEDump(filename, options):
     returnCode = 0
@@ -1612,9 +1874,9 @@ def OLEDump(filename, options):
             data = File2String(filename)
         if options.vbadecompress:
             if options.vbadecompresscorrupt:
-                vba = SearchAndDecompress(data, None)
+                vba = SearchAndDecompress(data, None, skipAttributes=options.vbadecompressskipattributes)
             else:
-                vba = SearchAndDecompress(data)
+                vba = SearchAndDecompress(data, skipAttributes=options.vbadecompressskipattributes)
             if options.plugins == '':
                 print(vba)
                 return returnCode
@@ -1657,7 +1919,7 @@ def OLEDump(filename, options):
         oStringIO = cStringIO.StringIO(sys.stdin.read())
     elif FilenameInSimulations(filename):
         oZipfile = zipfile.ZipFile(dslsimulationdb.GetSimulation(filename), 'r')
-        oZipContent = oZipfile.open(oZipfile.infolist()[0], 'r', C2BIP3(MALWARE_PASSWORD))
+        oZipContent = oZipfile.open(oZipfile.infolist()[0], 'r', C2BIP3(options.password))
         zipContent = oZipContent.read()
         if zipContent.startswith('Neut'):
             zipContent = OLEFILE_MAGIC + zipContent[4:]
@@ -1666,7 +1928,7 @@ def OLEDump(filename, options):
         oZipfile.close()
     elif filename.lower().endswith('.zip'):
         oZipfile = zipfile.ZipFile(filename, 'r')
-        oZipContent = oZipfile.open(oZipfile.infolist()[0], 'r', C2BIP3(MALWARE_PASSWORD))
+        oZipContent = oZipfile.open(oZipfile.infolist()[0], 'r', C2BIP3(options.password))
         oStringIO = cStringIO.StringIO(oZipContent.read())
         oZipContent.close()
         oZipfile.close()
@@ -1677,24 +1939,35 @@ def OLEDump(filename, options):
     oStringIO.seek(0)
     if magic[0:4] == OLEFILE_MAGIC:
         ole = olefile.OleFileIO(oStringIO)
-        returnCode = OLESub(ole, '', rules, options)
+        returnCode, selectionCounter = OLESub(ole, '', rules, options)
+        PrintWarningSelection(options.select, selectionCounter)
         ole.close()
     elif magic[0:2] == 'PK':
         oZipfile = zipfile.ZipFile(oStringIO, 'r')
         counter = 0
+        selectionCounterTotal = 0
+        oleFileFound = False
+        OPCFound = False
         for info in oZipfile.infolist():
             oZipContent = oZipfile.open(info, 'r')
             content = oZipContent.read()
+            if info.filename == '[Content_Types].xml':
+                OPCFound = True
             if content[0:4] == OLEFILE_MAGIC:
                 letter = chr(ord('A') + counter)
                 counter += 1
                 if options.select == '':
-                    if not options.quiet:
+                    if not options.quiet and not options.jsonoutput:
                         print('%s: %s' % (letter, info.filename))
                 ole = olefile.OleFileIO(cStringIO.StringIO(content))
-                returnCode = OLESub(ole, letter, rules, options)
+                returnCode, selectionCounter = OLESub(ole, letter, rules, options)
+                selectionCounterTotal += selectionCounter
+                oleFileFound = True
                 ole.close()
             oZipContent.close()
+        if not oleFileFound:
+            print('Warning: no OLE file was found inside this ZIP container%s' % IFF(OPCFound, ' (OPC)', ''))
+        PrintWarningSelection(options.select, selectionCounterTotal)
         oZipfile.close()
     else:
         data = oStringIO.read()
@@ -1729,13 +2002,15 @@ def OLEDump(filename, options):
                                         break
                                 print('%s: %s' % (letter, nameValue))
                         ole = olefile.OleFileIO(cStringIO.StringIO(content))
-                        returnCode = OLESub(ole, letter, rules, options)
+                        returnCode, selectionCounter = OLESub(ole, letter, rules, options)
+                        PrintWarningSelection(options.select, selectionCounter)
                         ole.close()
         elif data.startswith(ACTIVEMIME_MAGIC):
             content = HeuristicDecompress(data)
             if content[0:4] == OLEFILE_MAGIC:
                 ole = olefile.OleFileIO(cStringIO.StringIO(content))
-                returnCode = OLESub(ole, '', rules, options)
+                returnCode, selectionCounter = OLESub(ole, '', rules, options)
+                PrintWarningSelection(options.select, selectionCounter)
                 ole.close()
         else:
             print('Error: %s is not a valid OLE file.' % filename)
@@ -1753,8 +2028,11 @@ def Main():
     oParser.add_option('-d', '--dump', action='store_true', default=False, help='perform dump')
     oParser.add_option('-x', '--hexdump', action='store_true', default=False, help='perform hex dump')
     oParser.add_option('-a', '--asciidump', action='store_true', default=False, help='perform ascii dump')
+    oParser.add_option('-A', '--asciidumprle', action='store_true', default=False, help='perform ascii dump with RLE')
     oParser.add_option('-S', '--strings', action='store_true', default=False, help='perform strings dump')
+    oParser.add_option('-T', '--headtail', action='store_true', default=False, help='do head & tail')
     oParser.add_option('-v', '--vbadecompress', action='store_true', default=False, help='VBA decompression')
+    oParser.add_option('--vbadecompressskipattributes', action='store_true', default=False, help='VBA decompression, skipping initial attributes')
     oParser.add_option('--vbadecompresscorrupt', action='store_true', default=False, help='VBA decompression, display beginning if corrupted')
     oParser.add_option('-r', '--raw', action='store_true', default=False, help='read raw file (use with options -v or -p')
     oParser.add_option('-t', '--translate', type=str, default='', help='string translation, like utf16 or .decode("utf8")')
@@ -1775,6 +2053,8 @@ def Main():
     oParser.add_option('-V', '--verbose', action='store_true', default=False, help='verbose output with decoder errors')
     oParser.add_option('-C', '--cut', type=str, default='', help='cut data')
     oParser.add_option('-E', '--extra', type=str, default='', help='add extra info (environment variable: OLEDUMP_EXTRA)')
+    oParser.add_option('-j', '--jsonoutput', action='store_true', default=False, help='produce json output')
+    oParser.add_option('--password', default=MALWARE_PASSWORD, help='The ZIP password to be used (default %s)' % MALWARE_PASSWORD)
     (options, args) = oParser.parse_args()
 
     if options.man:
