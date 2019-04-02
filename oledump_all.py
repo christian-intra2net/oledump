@@ -54,7 +54,7 @@ RETURN_ARGUMENT_ERR = 2    # reserved for parse_args
 RETURN_OPEN_FAIL = 3       # failed to open a file
 RETURN_STREAM_FAIL = 4     # failed to open an OLE stream
 
-MAX_SIZE = 1024*1024
+MAX_SIZE = 100*1024*1024   # 100 MB
 
 
 def existing_file(filename):
