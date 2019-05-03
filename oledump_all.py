@@ -129,13 +129,19 @@ def ole_iter_streams(ole):
     read() streams
     """
     for fname in ole.listdir(streams=True, storages=False):
-        yield False, fname, ole.get_type(fname), ole.openstream(fname)
+        name_to_yield = fname
+        if not isinstance(fname, (list, tuple)):
+            name_to_yield = (fname, )   # ensure it is a tuple
+        yield False, name_to_yield, ole.get_type(fname), ole.openstream(fname)
     for sid in range(len(ole.direntries)):
         entry = ole.direntries[sid]
         if entry is None:
             entry = ole._load_direntry(sid)
             if entry.entry_type == olefile.STGTY_STREAM:
-                yield True, entry.name, entry.entry_type, \
+                name_to_yield = entry.name
+                if not isinstance(name_to_yield, (list, tuple)):
+                    name_to_yield = (entry.name, )  # ensure it is a tuple
+                yield True, name_to_yield, entry.entry_type, \
                       ole._open(entry.isectStart, entry.size)
     # TODO: can probably skip the first loop since 2nd finds the same
     # entries again with entry != None (see oletools/olevba.py)
